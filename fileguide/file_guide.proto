@@ -5,11 +5,20 @@ package fileguide;
 service FileGuide {
   rpc SaveFile(stream FileChunk) returns (FileSummary) {}
   rpc GetFile(Filename) returns (stream FileChunk) {}
+  rpc InitConnection(InitConnectionData) returns (InitConnectionData) {}
 }
+
+message InitConnectionData {
+  int64 NBPort = 1;
+  repeated int64 Ports = 2;
+}
+
 
 message FileChunk {
   bytes chunk = 1;
   string filename = 2;
+  int64 blockID = 3;
+  int64 totalBlock = 4;
 }
 
 message Filename {
@@ -25,4 +34,10 @@ message FileSummary {
 
   // The duration of the traversal in seconds.
   int64 elapsed_time = 3;
+
+  int64 blockID = 4;
+
+  int64 totalBlock = 5;
+
+  string name = 6;
 }

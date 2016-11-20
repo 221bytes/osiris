@@ -15,12 +15,20 @@ import (
 	"path/filepath"
 	"time"
 
+	"strconv"
+
 	pb "github.com/221bytes/osiris/fileguide"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/grpclog"
 )
 
-var downloadFolder = "files_download"
+var globalDownloadFolder = "files_download"
+
+func init() {
+	if _, err := os.Stat(globalDownloadFolder); os.IsNotExist(err) {
+		os.Mkdir(globalDownloadFolder, 0771)
+	}
+}
 
 func Encrypt(filename string) ([]byte, error) {
 	// read content from your file
@@ -100,11 +108,37 @@ func Recv(s grpc.Stream) (*pb.FileChunk, error) {
 	return m, nil
 }
 
+func MergeFile(dirPath string) {
+	files, err := ioutil.ReadDir(globalDownloadFolder + "/" + dirPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	out, err := os.Create(globalDownloadFolder + "/" + dirPath + "/" + dirPath)
+	if err != nil {
+		grpclog.Fatalf("runSaveFileRoute() got error %v, want %v", err, nil)
+	}
+
+	for _, file := range files {
+		file, err := os.Open(globalDownloadFolder + "/" + dirPath + "/" + file.Name())
+		if err != nil {
+			grpclog.Fatalf("runSaveFileRoute() got error %v, want %v", err, nil)
+		}
+		r := bufio.NewReader(file)
+		buf, err := ioutil.ReadAll(r)
+		if err != nil {
+			grpclog.Fatalf("runSaveFileRoute() got error %v, want %v", err, nil)
+		}
+		out.Write(buf)
+	}
+}
+
 func SaveFileFromStream(stream grpc.Stream) (*pb.FileSummary, error) {
 	nBytes, nChunks := int64(0), int64(0)
 	once := false
 	var out *os.File
 	startTime := time.Now()
+	blockID, totalBlock := int64(0), int64(0)
+	var filename string
 	for {
 		fileChunk, err := Recv(stream)
 		if err == io.EOF {
@@ -114,6 +148,9 @@ func SaveFileFromStream(stream grpc.Stream) (*pb.FileSummary, error) {
 				ByteCount:   nBytes,
 				ChunkCount:  nChunks,
 				ElapsedTime: elapsedTime,
+				BlockID:     blockID,
+				TotalBlock:  totalBlock,
+				Name:        filename,
 			}, nil
 		}
 		if err != nil {
@@ -121,13 +158,18 @@ func SaveFileFromStream(stream grpc.Stream) (*pb.FileSummary, error) {
 		}
 		if once == false {
 			once = true
-			if _, err := os.Stat(downloadFolder); os.IsNotExist(err) {
-				os.Mkdir(downloadFolder, 0771)
+			s := strconv.FormatInt(fileChunk.BlockID, 10)
+			currentDownloadFolder := globalDownloadFolder + "/" + fileChunk.Filename
+			if _, err := os.Stat(currentDownloadFolder); os.IsNotExist(err) {
+				os.Mkdir(currentDownloadFolder, 0771)
 			}
-			out, err = os.Create(downloadFolder + "/" + fileChunk.Filename)
+			out, err = os.Create(currentDownloadFolder + "/" + s + fileChunk.Filename)
 			if err != nil {
 				return nil, fmt.Errorf("SaveFileFromStream: os.create error : %v", err)
 			}
+			blockID = fileChunk.BlockID
+			totalBlock = fileChunk.TotalBlock
+			filename = fileChunk.Filename
 			defer out.Close()
 		}
 		n, err := out.Write(fileChunk.Chunk)
@@ -139,13 +181,11 @@ func SaveFileFromStream(stream grpc.Stream) (*pb.FileSummary, error) {
 	}
 }
 
-func SendFileToStream(filePath string, stream grpc.Stream) error {
+func SendFileToStream(file *os.File, stream grpc.Stream) error {
 	nBytes, nChunks := int64(0), int64(0)
 	buf := make([]byte, 0, 4000000)
-	file, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
+
+	filename := filepath.Base(file.Name())
 	r := bufio.NewReader(file)
 	for {
 		n, err := r.Read(buf[:cap(buf)])
@@ -162,14 +202,10 @@ func SendFileToStream(filePath string, stream grpc.Stream) error {
 		nChunks++
 		nBytes += int64(len(buf))
 		// process buf
-		filename := filepath.Base(filePath)
 		fileChunk := &pb.FileChunk{Chunk: buf, Filename: filename}
 
 		if err := stream.SendMsg(fileChunk); err != nil {
 			grpclog.Fatalf("%v.Send(%v) = %v", stream, fileChunk, err)
-		}
-		if err != nil && err != io.EOF {
-			log.Fatal(err)
 		}
 	}
 	grpclog.Printf("Sent: chunks %v\tbytes:%v", nChunks, nBytes)
