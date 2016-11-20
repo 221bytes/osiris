@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package fileguide;
+
+service FileGuide {
+  rpc SaveFile(stream FileChunk) returns (FileSummary) {}
+  rpc GetFile(Filename) returns (stream FileChunk) {}
+}
+
+message FileChunk {
+  bytes chunk = 1;
+  string filename = 2;
+}
+
+message Filename {
+  string name = 1;
+}
+
+message FileSummary {
+  // The number of points received.
+  int64 chunk_count = 1;
+
+  // The number of known features passed while traversing the route.
+  int64 byte_count = 2;
+
+  // The duration of the traversal in seconds.
+  int64 elapsed_time = 3;
+}
